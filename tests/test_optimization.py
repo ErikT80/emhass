@@ -11611,6 +11611,86 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             runs.append(current)
         return min(runs) if runs else 0
 
+    async def test_topology_minimum_on_thermal_runtime(self):
+        """Exercise the runtime compiler and MILP together on a modulating heat pump."""
+        n = 12
+        self.retrieve_hass_conf["optimization_time_step"] = pd.Timedelta(minutes=15)
+        prices = [0.5, -1, 0.05, 0.05, -1, -1, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+        df = self._make_min_on_scenario(n=n, prices=prices)
+        df["outdoor_temperature_forecast"] = 10.0
+        topology = {
+            "sources": [
+                {
+                    "id": "hp",
+                    "type": "heatpump",
+                    "nominal_power": 1200,
+                    "min_power": 440,
+                    "treat_as_semi_cont": False,
+                    "supply_temperature": 30,
+                    "minimum_on_timesteps": 4,
+                }
+            ],
+            "storage": [
+                {
+                    "id": "room",
+                    "thermal_mass": 5,
+                    "loss_coefficient": 0,
+                    "start_temperature": 19,
+                    "min_temperatures": [19] * n,
+                    "max_temperatures": [21] * n,
+                }
+            ],
+            "flows": [{"from": "hp", "to": "room"}],
+        }
+        params = {
+            "retrieve_hass_conf": self.retrieve_hass_conf,
+            "optim_conf": self.optim_conf,
+            "plant_conf": self.plant_conf,
+        }
+        params_json = orjson.dumps(params, default=str).decode()
+
+        async def solve(minimum, state=None):
+            if minimum is None:
+                topology["sources"][0].pop("minimum_on_timesteps", None)
+            else:
+                topology["sources"][0]["minimum_on_timesteps"] = minimum
+            runtime = {"heat_topology": topology}
+            if state:
+                runtime["def_current_state"] = [True]
+                if state == "elapsed":
+                    runtime["def_current_on_timesteps"] = [2]
+            _, _, oc, _ = await utils.treat_runtimeparams(
+                orjson.dumps(runtime).decode(),
+                params_json,
+                copy.deepcopy(self.retrieve_hass_conf),
+                copy.deepcopy(self.optim_conf),
+                copy.deepcopy(self.plant_conf),
+                "naive-mpc-optim",
+                logger,
+                emhass_conf,
+            )
+            oc["set_use_battery"] = False
+            opt, res = self._run_min_on_optim(oc, df, n)
+            self.assertEqual(opt.optim_status, "Optimal")
+            return res
+
+        base = await solve(0)
+        constrained = await solve(4)
+        omitted = await solve(None)
+        base_power = base["P_deferrable0"].to_numpy()
+        np.testing.assert_allclose(base_power, omitted["P_deferrable0"], atol=0.01)
+        self.assertEqual(self._min_run_length(base_power > 1), 1)
+        power = constrained["P_deferrable0"].to_numpy()
+        self.assertGreaterEqual(self._min_run_length(power > 1), 4)
+        self.assertTrue(np.any((power > 439.99) & (power < 1199.99)), power)
+        self.assertTrue(np.all((power < 0.01) | (power >= 439.99)), power)
+        unknown = await solve(4, state="unknown")
+        self.assertLess(unknown["P_deferrable0"].iloc[0], 0.01)
+        result = await solve(4, state="elapsed")
+        power = result["P_deferrable0"].to_numpy()
+        self.assertTrue(np.all(power[:2] >= 439.99), power)
+        self.assertTrue(np.all(power <= 1200.01), power)
+
     def test_minimum_on_time_forward_red1(self):
         """RED-1 (forward): with a price profile that makes the base solver
         short-cycle a semi_cont load (on-off-on), setting def_minimum_on_time=[3,0]

@@ -766,6 +766,14 @@ def compile_heat_topology(topology: dict) -> dict:
             if not isinstance(entry, dict) or entry.get("id") in (None, ""):
                 raise ValueError(f"heat_topology.{kind}[{i}] is missing the required 'id' field")
 
+    for src in sources:
+        value = src.get("minimum_on_timesteps", 0)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(
+                f"heat_topology.sources[{src['id']}].minimum_on_timesteps must be "
+                f"a non-negative integer, got {value!r}"
+            )
+
     src_by_id = {s["id"]: s for s in sources}
     src_index_by_id = {s["id"]: i for i, s in enumerate(sources)}
     sto_by_id = {s["id"]: s for s in storage}
@@ -835,6 +843,7 @@ def compile_heat_topology(topology: dict) -> dict:
     num_loads = len(source_flows)
     nominal_power = []
     min_power = []
+    minimum_on_time = []
     treat_semi_cont = []
     operating_hours = []
     startup_penalty = []
@@ -859,6 +868,7 @@ def compile_heat_topology(topology: dict) -> dict:
             )
         nominal_power.append(src_nominal_power)
         min_power.append(src_min_power)
+        minimum_on_time.append(src.get("minimum_on_timesteps", 0))
         treat_semi_cont.append(bool(src.get("treat_as_semi_cont", True)))
         operating_hours.append(int(src.get("operating_hours", 4)))
         # Anti-short-cycle controls (optional, per source). The startup penalty
@@ -1395,6 +1405,7 @@ def compile_heat_topology(topology: dict) -> dict:
         "number_of_deferrable_loads": num_loads,
         "nominal_power_of_deferrable_loads": nominal_power,
         "minimum_power_of_deferrable_loads": min_power,
+        "def_minimum_on_time": minimum_on_time,
         "treat_deferrable_load_as_semi_cont": treat_semi_cont,
         "operating_hours_of_each_deferrable_load": operating_hours,
         "set_deferrable_load_single_constant": [False] * num_loads,
@@ -1474,6 +1485,7 @@ _TOPOLOGY_REPLACED_KEYS = frozenset(
         "deferrable_load_groups",
         "nominal_power_of_deferrable_loads",
         "minimum_power_of_deferrable_loads",
+        "def_minimum_on_time",
         "treat_deferrable_load_as_semi_cont",
         "cost_forecast_per_deferrable_load",
         "set_deferrable_load_single_constant",
@@ -1581,6 +1593,7 @@ def _extend_optim_conf_with_compiled_topology(
     pad_defaults = {
         "nominal_power_of_deferrable_loads": 0.0,
         "minimum_power_of_deferrable_loads": 0.0,
+        "def_minimum_on_time": 0,
         "treat_deferrable_load_as_semi_cont": True,
         "operating_hours_of_each_deferrable_load": 0,
         "set_deferrable_load_single_constant": False,
@@ -1596,12 +1609,11 @@ def _extend_optim_conf_with_compiled_topology(
         existing = _per_user_load_list(optim_conf.get(key), offset)
         existing += [default] * (offset - len(existing))
         optim_conf[key] = existing[:offset] + list(compiled[key])
-    # Minimum on/off times and MPC operating timesteps are not compiled; keep the
+    # Minimum off times and MPC operating timesteps are not compiled; keep the
     # user's entries for their own loads and give the topology loads none (a
     # longer user array must not leak onto the appended loads).
     n_compiled = len(compiled["def_load_config"])
     for key in (
-        "def_minimum_on_time",
         "def_minimum_off_time",
         "operating_timesteps_of_each_deferrable_load",
     ):
@@ -4087,6 +4099,15 @@ async def treat_runtimeparams(
                 # association loop's own null-skipping - a padded config
                 # array should never be reported as a runtime override.
                 was_provided = runtime_value is not None
+
+                if (
+                    def_array_name == "def_minimum_on_time"
+                    and isinstance(heat_topology, dict)
+                    and heat_topology
+                    and not extend_mode
+                ):
+                    # Replacement mode owns the compiled loads, including this array.
+                    continue
 
                 if (
                     was_provided
