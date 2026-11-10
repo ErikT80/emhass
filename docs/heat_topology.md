@@ -69,6 +69,7 @@ watts of source input:
 | `type` | `heatpump` (`heat_pump` is accepted as the same type), `gas`, `oil`, `district`, `electric`, or `constant_efficiency`. |
 | `nominal_power` | Maximum source input power in W. |
 | `min_power` | Optional minimum input power in W; default `0`. Must not exceed `nominal_power`. |
+| `minimum_on_timesteps` | Optional non-negative integer minimum ON duration per source-to-storage flow, in optimization timesteps; default `0` (disabled). |
 | `treat_as_semi_cont` | Optional on/off behavior at `nominal_power` (lower where `max_thermal_power` binds, see below); default `true`. |
 | `supply_temperature` | Fixed heat-pump supply temperature in degrees Celsius. |
 | `heating_curve` | Alternative heat-pump supply-temperature curve. |
@@ -91,6 +92,54 @@ Both apply per flow: a source that feeds two storages compiles into one load
 per flow, and each load counts its own starts. A source that switches from one
 storage to the other therefore starts the second flow, and its `max_startups`
 limits each flow separately, not the unit as a whole.
+
+#### Minimum ON duration
+
+`minimum_on_timesteps` uses the existing `def_minimum_on_time` optimizer
+constraint for each load compiled from the source's flows. For example, four
+15-minute timesteps mean 60 minutes. Set a positive `min_power` and
+`treat_as_semi_cont: false` to allow modulation between that minimum and
+`nominal_power` while ON. With no minimum power, the ON binary can remain set
+at zero power. Semi-continuous sources instead operate at their ON level.
+
+The following complete topology extends any existing deferrable loads:
+
+```yaml
+heat_topology:
+  extend_deferrable_loads: true
+  sources:
+    - id: elga
+      type: heatpump
+      nominal_power: 1200
+      min_power: 440
+      treat_as_semi_cont: false
+      supply_temperature: 30
+      carnot_efficiency: 0.444
+      minimum_on_timesteps: 4
+  storage:
+    - id: living
+      thermal_mass: 26.07
+      loss_coefficient: 0.1543
+      thermal_inertia: 0.5
+      start_temperature: 19
+      min_temperatures: [19]
+      max_temperatures: [21]
+  flows:
+    - from: elga
+      to: living
+```
+
+For a load already running at the start of an MPC horizon, supply both
+`def_current_state` and `def_current_on_timesteps` at the compiled load's
+index to enforce the remaining duration. If elapsed time is unknown, EMHASS
+does not invent it or force the remainder. Repeated MPC runs require updated
+actual state and elapsed time. The optimizer truncates the constraint at the
+horizon end; the initial remainder is also limited by the operating window,
+and availability or a satisfied target can release a running load. Thus a
+plan alone does not guarantee physical compressor runtime across horizons.
+Other constraints, including comfort and operating windows, still apply and
+can make a schedule infeasible or prevent a start. A planned ON period does
+not override equipment safety protections or actual device control behavior.
 
 A heat pump requires `supply_temperature`, a `heating_curve`, or a
 `cooling_curve`. A

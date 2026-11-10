@@ -2403,6 +2403,47 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(out["def_minimum_on_time"], [3] * original_num + [0, 0])
         self.assertEqual(out["def_minimum_off_time"], [2] * original_num + [0, 0])
 
+    def test_topology_minimum_on_validation_and_flow_order(self):
+        topo = self._hp_booster_extend_topo(extend=False)
+        topo["storage"].append({**topo["storage"][0], "id": "other"})
+        topo["flows"] = [
+            {"from": "booster", "to": "dhw"},
+            {"from": "hp", "to": "other"},
+            {"from": "hp", "to": "dhw"},
+        ]
+        for value in (0, 1, 2, 4):
+            topo["sources"][0]["minimum_on_timesteps"] = value
+            self.assertEqual(
+                utils.compile_heat_topology(topo)["def_minimum_on_time"], [0, value, value]
+            )
+        del topo["sources"][0]["minimum_on_timesteps"]
+        self.assertEqual(utils.compile_heat_topology(topo)["def_minimum_on_time"], [0, 0, 0])
+        for value in (-1, 1.5, True, "4", None, 4.0):
+            topo["sources"][0]["minimum_on_timesteps"] = value
+            with (
+                self.subTest(value=value),
+                self.assertRaisesRegex(ValueError, r"hp.*minimum_on_timesteps"),
+            ):
+                utils.compile_heat_topology(topo)
+
+    async def test_topology_minimum_on_runtime_modes(self):
+        for extend in (False, True):
+            for action in ("dayahead-optim", "naive-mpc-optim"):
+                params = await TestUtils.get_test_params()
+                n_user = params["optim_conf"]["number_of_deferrable_loads"]
+                params_json = orjson.dumps(params).decode("utf-8")
+                rh, oc, pc = utils.get_yaml_parse(params_json, logger)
+                topo = self._hp_booster_extend_topo(extend=extend)
+                topo["sources"][0]["minimum_on_timesteps"] = 4
+                runtime = orjson.dumps(
+                    {"heat_topology": topo, "def_minimum_on_time": [2] * (n_user + 5)}
+                ).decode("utf-8")
+                _, _, out, _ = await treat_runtimeparams(
+                    runtime, params_json, rh, oc, pc, action, logger, emhass_conf
+                )
+                expected = ([2] * n_user if extend else []) + [4, 0]
+                self.assertEqual(out["def_minimum_on_time"], expected)
+
     def test_compile_heat_topology_rejects_unusable_series_and_groups(self):
         """Values the optimizer cannot use are rejected at compile (and so at
         save) instead of failing the next run: a non-numeric profile or cost
