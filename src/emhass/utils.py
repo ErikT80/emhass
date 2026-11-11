@@ -773,11 +773,22 @@ def compile_heat_topology(topology: dict) -> dict:
                 f"heat_topology.sources[{src['id']}].minimum_on_timesteps must be "
                 f"a non-negative integer, got {value!r}"
             )
-        if value > 0 and not bool(src.get("treat_as_semi_cont", True)):
-            if not float(src.get("min_power", 0)) > 0:
+        if value > 0:
+            semi_cont = bool(src.get("treat_as_semi_cont", True))
+            power_field = "nominal_power" if semi_cont else "min_power"
+            try:
+                power = float(src.get(power_field, 0))
+            except (TypeError, ValueError, OverflowError):
+                power = float("nan")
+            if not math.isfinite(power) or power <= 0:
+                if semi_cont:
+                    raise ValueError(
+                        f"heat_topology.sources[{src['id']}].minimum_on_timesteps requires "
+                        "finite nominal_power > 0 when treat_as_semi_cont is true"
+                    )
                 raise ValueError(
                     f"heat_topology.sources[{src['id']}].minimum_on_timesteps requires "
-                    "min_power > 0 when treat_as_semi_cont is false"
+                    "finite min_power > 0 when treat_as_semi_cont is false"
                 )
 
     src_by_id = {s["id"]: s for s in sources}
