@@ -99,8 +99,9 @@ limits each flow separately, not the unit as a whole.
 constraint for each load compiled from the source's flows. For example, four
 15-minute timesteps mean 60 minutes. Set a positive `min_power` and
 `treat_as_semi_cont: false` to allow modulation between that minimum and
-`nominal_power` while ON. With no minimum power, the ON binary can remain set
-at zero power. Semi-continuous sources instead operate at their ON level.
+`nominal_power` while ON. A continuous source without `min_power` may not
+have linked binary controls and cannot guarantee a positive physical output.
+Semi-continuous sources instead operate at their ON level.
 
 The following complete topology extends any existing deferrable loads:
 
@@ -129,17 +130,50 @@ heat_topology:
       to: living
 ```
 
-For a load already running at the start of an MPC horizon, supply both
-`def_current_state` and `def_current_on_timesteps` at the compiled load's
-index to enforce the remaining duration. If elapsed time is unknown, EMHASS
-does not invent it or force the remainder. Repeated MPC runs require updated
-actual state and elapsed time. The optimizer truncates the constraint at the
-horizon end; the initial remainder is also limited by the operating window,
-and availability or a satisfied target can release a running load. Thus a
-plan alone does not guarantee physical compressor runtime across horizons.
-Other constraints, including comfort and operating windows, still apply and
-can make a schedule infeasible or prevent a start. A planned ON period does
-not override equipment safety protections or actual device control behavior.
+For MPC, provide the **measured** current state and the number of completed ON
+timesteps at every run. For a running source with two completed steps:
+
+```json
+{
+  "prediction_horizon": 288,
+  "heat_topology": {
+    "sources": [{"id": "elga", "type": "heatpump", "nominal_power": 1200,
+      "min_power": 440, "treat_as_semi_cont": false, "supply_temperature": 30,
+      "carnot_efficiency": 0.444, "max_thermal_power": 5000,
+      "minimum_on_timesteps": 4}],
+    "storage": [{"id": "living", "thermal_mass": 26.07,
+      "loss_coefficient": 0.1543, "start_temperature": 19,
+      "min_temperatures": [19], "max_temperatures": [21]}],
+    "flows": [{"from": "elga", "to": "living"}]
+  },
+  "def_current_state": [true],
+  "def_current_on_timesteps": [2]
+}
+```
+
+In replace mode the arrays follow source-to-storage flow order. In extend mode
+the existing user loads occupy the first N indices and topology flows follow;
+provide actual state and elapsed time for each relevant index. Count completed
+15-minute intervals since the **actual** start, not a planned start; reset the
+count after an actual stop. A planned start need not have happened. Missing
+state is assumed OFF by the existing optimizer and generates a warning; if ON
+is known but elapsed time is missing, a warning is logged and no remainder is
+forced. Neither case guarantees a physical runtime. An integration requiring
+fail-closed operation must check the freshness and completeness of its own
+measurements and reject unsafe or uncertain plans; EMHASS does not provide a
+strict state-feedback mode here.
+
+With the setting enabled, a new topology-flow start is prohibited unless its
+entire minimum duration fits in the horizon. An already-running flow's
+remainder is limited by the horizon and operating-window end; availability or
+a satisfied target can release it. Comfort limits and `max_thermal_power` can
+prevent a start or make the model infeasible. On MILP failure EMHASS may return
+`Optimal (Relaxed)`: its relaxed on/off variables do not guarantee the minimum
+duration or the electrical minimum, so do not treat that status as a verified
+compressor schedule. Actual device safety protections and controls always
+remain authoritative. A source feeding multiple storages is modeled as one
+load per flow; switching flows can start a new modeled run even if the physical
+compressor stays ON. Unit-wide tracking would require additional modeling.
 
 A heat pump requires `supply_temperature`, a `heating_curve`, or a
 `cooling_curve`. A
