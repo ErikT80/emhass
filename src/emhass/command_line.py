@@ -345,6 +345,8 @@ class OptimizationCache:
         }
         # Optim conf parameters that don't affect problem structure
         # (parameterized via CVXPY Parameters, solver options, or forecast method selection)
+        # minimum_power_of_deferrable_loads is structural: it selects binary logic
+        # and is embedded as a constant in the minimum-power constraint.
         optim_conf_runtime_keys = {
             # Parameterized via CVXPY Parameters
             "operating_hours_of_each_deferrable_load",
@@ -363,7 +365,6 @@ class OptimizationCache:
             # Per-call completed operating timesteps today (issue #983); decrements
             # required_timesteps + target_energy via cp.Parameter (no rebuild on cache hit).
             "def_current_operating_timesteps",
-            "minimum_power_of_deferrable_loads",
             "cost_forecast_per_deferrable_load",
             # shared_thermal_tanks has its own structural hash field above
             "shared_thermal_tanks",
