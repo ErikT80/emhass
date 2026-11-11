@@ -2457,6 +2457,31 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         del source["minimum_on_timesteps"]
         self.assertEqual(utils.compile_heat_topology(topo)["def_minimum_on_time"], [0, 0])
 
+    def test_topology_minimum_on_rejects_invalid_power(self):
+        topo = self._hp_booster_extend_topo(extend=False)
+        source = topo["sources"][0]
+        source.update(minimum_on_timesteps=4, treat_as_semi_cont=False)
+        for invalid in (None, "invalid", "nan", float("nan"), float("inf"), float("-inf")):
+            source["min_power"] = invalid
+            with (
+                self.subTest(min_power=invalid),
+                self.assertRaisesRegex(ValueError, r"hp.*minimum_on_timesteps.*min_power"),
+            ):
+                utils.compile_heat_topology(topo)
+        source.update(treat_as_semi_cont=True, min_power=0)
+        for invalid in (0, None, "invalid", float("inf"), float("nan")):
+            source["nominal_power"] = invalid
+            with (
+                self.subTest(nominal_power=invalid),
+                self.assertRaisesRegex(ValueError, r"hp.*minimum_on_timesteps.*nominal_power"),
+            ):
+                utils.compile_heat_topology(topo)
+        source["nominal_power"] = 0
+        source["minimum_on_timesteps"] = 0
+        self.assertEqual(utils.compile_heat_topology(topo)["def_minimum_on_time"], [0, 0])
+        del source["minimum_on_timesteps"]
+        self.assertEqual(utils.compile_heat_topology(topo)["def_minimum_on_time"], [0, 0])
+
     async def test_topology_minimum_on_runtime_modes(self):
         for extend in (False, True):
             for action in ("dayahead-optim", "naive-mpc-optim"):
