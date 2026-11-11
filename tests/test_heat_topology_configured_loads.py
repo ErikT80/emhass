@@ -77,12 +77,12 @@ def _write(tmp_path, config: dict) -> pathlib.Path:
 
 
 def test_topology_minimum_on_changes_optimization_cache_key(tmp_path):
-    """Structural duration and horizon rules rebuild; measured state does not."""
+    """Duration, power and horizon rules rebuild; measured state does not."""
     from emhass.command_line import OptimizationCache
 
-    def compiled(duration):
+    def compiled(duration, min_power=440):
         topology = deepcopy(TOPOLOGY)
-        topology["sources"][0].update(min_power=440, minimum_on_timesteps=duration)
+        topology["sources"][0].update(min_power=min_power, minimum_on_timesteps=duration)
         return _optim_conf_from(_write(tmp_path, {"heat_topology": topology}))
 
     def key(conf):
@@ -93,6 +93,8 @@ def test_topology_minimum_on_changes_optimization_cache_key(tmp_path):
     disabled, two, four = (compiled(n) for n in (0, 2, 4))
     assert key(disabled) != key(four)
     assert key(two) != key(four)
+    changed_min_power = compiled(4, min_power=600)
+    assert key(four) != key(changed_min_power)
     changed_marker = {**four, "heat_topology_minimum_on_loads": [False]}
     assert key(four) != key(changed_marker)
     feedback = {**four, "def_current_state": [True], "def_current_on_timesteps": [2]}
