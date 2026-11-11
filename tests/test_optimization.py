@@ -11649,16 +11649,18 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         }
         params_json = orjson.dumps(params, default=str).decode()
 
-        async def solve(minimum, state=None):
+        async def solve(
+            minimum, state=None, forecast=None, elapsed=2, force_relaxed=False, legacy=False
+        ):
             if minimum is None:
                 topology["sources"][0].pop("minimum_on_timesteps", None)
             else:
                 topology["sources"][0]["minimum_on_timesteps"] = minimum
             runtime = {"heat_topology": topology}
             if state:
-                runtime["def_current_state"] = [True]
+                runtime["def_current_state"] = [state != "off"]
                 if state == "elapsed":
-                    runtime["def_current_on_timesteps"] = [2]
+                    runtime["def_current_on_timesteps"] = [elapsed]
             _, _, oc, _ = await utils.treat_runtimeparams(
                 orjson.dumps(runtime).decode(),
                 params_json,
@@ -11670,8 +11672,20 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
                 emhass_conf,
             )
             oc["set_use_battery"] = False
-            opt, res = self._run_min_on_optim(oc, df, n)
-            self.assertEqual(opt.optim_status, "Optimal")
+            if legacy:
+                oc.pop("heat_topology_minimum_on_loads")
+            forecast = df if forecast is None else forecast
+            if force_relaxed:
+                with (
+                    mock.patch.object(Optimization, "_needs_relaxed_retry", return_value=True),
+                    self.assertLogs(logger, level="WARNING") as logs,
+                ):
+                    opt, res = self._run_min_on_optim(oc, forecast, len(forecast))
+                self.assertTrue(any("does not guarantee" in msg for msg in logs.output))
+                self.assertEqual(opt.optim_status, "Optimal (Relaxed)")
+            else:
+                opt, res = self._run_min_on_optim(oc, forecast, len(forecast))
+                self.assertEqual(opt.optim_status, "Optimal")
             return res
 
         base = await solve(0)
@@ -11684,12 +11698,59 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(self._min_run_length(power > 1), 4)
         self.assertTrue(np.any((power > 439.99) & (power < 1199.99)), power)
         self.assertTrue(np.all((power < 0.01) | (power >= 439.99)), power)
-        unknown = await solve(4, state="unknown")
+        with self.assertLogs(logger, level="WARNING") as logs:
+            unknown = await solve(4, state="unknown")
+        self.assertTrue(any("def_current_on_timesteps is missing" in msg for msg in logs.output))
         self.assertLess(unknown["P_deferrable0"].iloc[0], 0.01)
         result = await solve(4, state="elapsed")
         power = result["P_deferrable0"].to_numpy()
         self.assertTrue(np.all(power[:2] >= 439.99), power)
         self.assertTrue(np.all(power <= 1200.01), power)
+
+        # Actual feedback, not the previous plan, drives each subsequent run.
+        # Reverse prices so the next solve would prefer to stop immediately.
+        costly = df.copy()
+        costly[self.fcst.var_load_cost] = 0.5
+        start_forecast = costly.copy()
+        start_forecast.iloc[:4, start_forecast.columns.get_loc(self.fcst.var_load_cost)] = -1
+        first = await solve(4, state="off", forecast=start_forecast)
+        self.assertGreaterEqual(first["P_deferrable0"].iloc[0], 439.99)
+        # Simulate applying only the first step and feed the measured ON state
+        # and completed duration into each following 15-minute replan.
+        actual_on, completed = True, 1
+        for _ in range(3):
+            replanned = await solve(4, state="elapsed", forecast=costly, elapsed=completed)
+            actual_on = replanned["P_deferrable0"].iloc[0] >= 439.99
+            self.assertTrue(actual_on)
+            completed = completed + 1 if actual_on else 0
+        self.assertEqual(completed, 4)
+        for elapsed in (1, 2, 3, 4, 5):
+            result = await solve(4, state="elapsed", forecast=costly, elapsed=elapsed)
+            power = result["P_deferrable0"].to_numpy()
+            remaining = max(0, 4 - elapsed)
+            self.assertTrue(np.all(power[:remaining] >= 439.99), power)
+            self.assertLess(power[remaining], 0.01)
+        # A real unexpected stop is reported as OFF; no prior plan forces a restart.
+        stopped = await solve(4, state="off", forecast=costly)
+        self.assertLess(stopped["P_deferrable0"].iloc[0], 0.01)
+        restarted = await solve(4, state="elapsed", forecast=costly, elapsed=1)
+        self.assertTrue(np.all(restarted["P_deferrable0"].to_numpy()[:3] >= 439.99))
+
+        # A profitable start at any of the last three steps cannot fit four steps.
+        for start in (n - 3, n - 2, n - 1):
+            late = costly.copy()
+            late.iloc[start, late.columns.get_loc(self.fcst.var_load_cost)] = -1
+            result = await solve(4, forecast=late)
+            on = result["P_deferrable0"].to_numpy() > 1
+            starts = np.flatnonzero(on & ~np.r_[False, on[:-1]])
+            self.assertTrue(np.all(starts <= n - 4), starts)
+        legacy = await solve(4, forecast=late, legacy=True)
+        self.assertGreaterEqual(legacy["P_deferrable0"].iloc[-1], 439.99)
+        short = costly.iloc[:3].copy()
+        short[self.fcst.var_load_cost] = -1
+        result = await solve(4, forecast=short)
+        self.assertTrue(np.all(result["P_deferrable0"].to_numpy() < 0.01))
+        await solve(4, forecast=costly, force_relaxed=True)
 
     def test_minimum_on_time_forward_red1(self):
         """RED-1 (forward): with a price profile that makes the base solver

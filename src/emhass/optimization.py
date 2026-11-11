@@ -7230,13 +7230,20 @@ class Optimization:
                         self.optim_conf["def_minimum_on_time"][k], k, "def_minimum_on_time"
                     )
                     if min_on_n > 0:
-                        # For every timestep t where p_def_start[k][t] fires (1 = rising
-                        # edge), keep bin2 ON for the next min_on_n steps. Clamped to
-                        # the horizon end so the constraint is never trivially infeasible.
+                        # For every startup keep bin2 ON for min_on_n steps.
+                        # Ordinary loads retain the horizon-truncated rule; topology
+                        # loads with this feature enabled require a complete run.
                         # Self-protecting vs window: if a start can't fit N on-steps
                         # within its operating window, the solver simply won't start the
                         # load -> stays Optimal. (Tested by FEASIBILITY test.)
+                        topology_loads = self.optim_conf.get("heat_topology_minimum_on_loads", [])
                         for t in range(n):
+                            if k < len(topology_loads) and topology_loads[k] and t + min_on_n > n:
+                                # Do not start a topology load unless the whole
+                                # minimum run fits in this horizon. Already-on
+                                # loads are handled by the remainder constraint.
+                                constraints.append(p_def_start[k][t] == 0)
+                                continue
                             window_end = min(t + min_on_n, n)
                             constraints.append(
                                 cp.sum(p_def_bin2[k][t:window_end])
@@ -8691,6 +8698,23 @@ class Optimization:
         # Update def_current_on_timesteps so the min-on remainder block (issue #952)
         # has the correct elapsed on-time when it runs in the per-load loop below.
         self._update_def_current_on_timesteps_params(num_deferrable_loads)
+        for k, enabled in enumerate(self.optim_conf.get("heat_topology_minimum_on_loads", [])):
+            if not enabled or k >= num_deferrable_loads:
+                continue
+            states = self.optim_conf.get("def_current_state", [])
+            elapsed = self.optim_conf.get("def_current_on_timesteps", [])
+            if k >= len(states):
+                self.logger.warning(
+                    "Heat topology load %d has minimum ON time but no current state; "
+                    "the optimizer assumes OFF, so its physical runtime is unknown.",
+                    k,
+                )
+            elif self.param_def_current_state[k].value > 0.5 and k >= len(elapsed):
+                self.logger.warning(
+                    "Heat topology load %d is ON but def_current_on_timesteps is missing; "
+                    "the remaining minimum ON time cannot be enforced.",
+                    k,
+                )
         # Update def_current_off_timesteps so the min-off remainder block (#952 follow-on)
         # has the correct elapsed off-time when it runs in the per-load loop below.
         self._update_def_current_off_timesteps_params(num_deferrable_loads)
@@ -9491,6 +9515,12 @@ class Optimization:
                         relaxed_ok = True
                     if relaxed_ok:
                         self.logger.info("Relaxed optimization successful!")
+                        if any(self.optim_conf.get("heat_topology_minimum_on_loads", [])):
+                            self.logger.warning(
+                                "Relaxed optimization does not guarantee heat topology "
+                                "minimum ON durations or minimum power; do not treat "
+                                "this result as a verified compressor schedule."
+                            )
                         # Mark status so user knows it was relaxed
                         prob_relaxed._status = "Optimal (Relaxed)"
                     else:

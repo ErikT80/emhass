@@ -2444,6 +2444,27 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
                 expected = ([2] * n_user if extend else []) + [4, 0]
                 self.assertEqual(out["def_minimum_on_time"], expected)
 
+    async def test_topology_minimum_on_missing_elapsed_is_not_padded(self):
+        params = await TestUtils.get_test_params()
+        n_user = params["optim_conf"]["number_of_deferrable_loads"]
+        params_json = orjson.dumps(params).decode("utf-8")
+        rh, oc, pc = utils.get_yaml_parse(params_json, logger)
+        topo = self._hp_booster_extend_topo(extend=True)
+        topo["sources"][0]["minimum_on_timesteps"] = 4
+        runtime = orjson.dumps(
+            {
+                "heat_topology": topo,
+                "def_current_state": [False] * n_user + [True, False],
+                "def_current_on_timesteps": [0] * n_user,
+            }
+        ).decode("utf-8")
+        _, _, out, _ = await treat_runtimeparams(
+            runtime, params_json, rh, oc, pc, "naive-mpc-optim", logger, emhass_conf
+        )
+        self.assertEqual(out["def_current_state"], [False] * n_user + [True, False])
+        self.assertEqual(out["def_current_on_timesteps"], [0] * n_user)
+        self.assertEqual(out["heat_topology_minimum_on_loads"], [False] * n_user + [True, False])
+
     def test_compile_heat_topology_rejects_unusable_series_and_groups(self):
         """Values the optimizer cannot use are rejected at compile (and so at
         save) instead of failing the next run: a non-numeric profile or cost

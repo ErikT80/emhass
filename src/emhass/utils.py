@@ -1406,6 +1406,7 @@ def compile_heat_topology(topology: dict) -> dict:
         "nominal_power_of_deferrable_loads": nominal_power,
         "minimum_power_of_deferrable_loads": min_power,
         "def_minimum_on_time": minimum_on_time,
+        "heat_topology_minimum_on_loads": [value > 0 for value in minimum_on_time],
         "treat_deferrable_load_as_semi_cont": treat_semi_cont,
         "operating_hours_of_each_deferrable_load": operating_hours,
         "set_deferrable_load_single_constant": [False] * num_loads,
@@ -1486,6 +1487,7 @@ _TOPOLOGY_REPLACED_KEYS = frozenset(
         "nominal_power_of_deferrable_loads",
         "minimum_power_of_deferrable_loads",
         "def_minimum_on_time",
+        "heat_topology_minimum_on_loads",
         "treat_deferrable_load_as_semi_cont",
         "cost_forecast_per_deferrable_load",
         "set_deferrable_load_single_constant",
@@ -1594,6 +1596,7 @@ def _extend_optim_conf_with_compiled_topology(
         "nominal_power_of_deferrable_loads": 0.0,
         "minimum_power_of_deferrable_loads": 0.0,
         "def_minimum_on_time": 0,
+        "heat_topology_minimum_on_loads": False,
         "treat_deferrable_load_as_semi_cont": True,
         "operating_hours_of_each_deferrable_load": 0,
         "set_deferrable_load_single_constant": False,
@@ -1634,6 +1637,11 @@ def _extend_optim_conf_with_compiled_topology(
         ("def_current_operating_timesteps", 0),
     ):
         existing = optim_conf.get(key)
+        if key in ("def_current_state", "def_current_on_timesteps") and any(
+            compiled["heat_topology_minimum_on_loads"]
+        ):
+            # Preserve missing state and elapsed values as unknown for diagnosis.
+            continue
         if isinstance(existing, list) and len(existing) == offset:
             optim_conf[key] = list(existing) + [default] * n_compiled
     # def_load_config pads with fresh dicts (no shared instance between slots).
