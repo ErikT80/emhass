@@ -99,9 +99,10 @@ limits each flow separately, not the unit as a whole.
 constraint for each load compiled from the source's flows. For example, four
 15-minute timesteps mean 60 minutes. Set a positive `min_power` and
 `treat_as_semi_cont: false` to allow modulation between that minimum and
-`nominal_power` while ON. A continuous source without `min_power` may not
-have linked binary controls and cannot guarantee a positive physical output.
-Semi-continuous sources instead operate at their ON level.
+`nominal_power` while ON. A positive minimum duration is rejected for a
+continuous source without positive `min_power`, because its ON state would
+not enforce positive output. Semi-continuous sources instead operate at their
+ON level. A zero or omitted minimum duration keeps existing behavior.
 
 The following complete topology extends any existing deferrable loads:
 
@@ -159,9 +160,10 @@ count after an actual stop. A planned start need not have happened. Missing
 state is assumed OFF by the existing optimizer and generates a warning; if ON
 is known but elapsed time is missing, a warning is logged and no remainder is
 forced. Neither case guarantees a physical runtime. An integration requiring
-fail-closed operation must check the freshness and completeness of its own
-measurements and reject unsafe or uncertain plans; EMHASS does not provide a
-strict state-feedback mode here.
+fail-closed operation must reject unsafe or uncertain plans. The external EMS
+integration is responsible for checking sensor freshness and completeness at
+every run: EMHASS cannot establish freshness merely because arrays were
+provided. EMHASS does not provide a strict state-feedback mode here.
 
 With the setting enabled, a new topology-flow start is prohibited unless its
 entire minimum duration fits in the horizon. An already-running flow's

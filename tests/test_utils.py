@@ -2413,9 +2413,13 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
         ]
         for value in (0, 1, 2, 4):
             topo["sources"][0]["minimum_on_timesteps"] = value
+            compiled = utils.compile_heat_topology(topo)
+            self.assertEqual(compiled["def_minimum_on_time"], [0, value, value])
             self.assertEqual(
-                utils.compile_heat_topology(topo)["def_minimum_on_time"], [0, value, value]
+                compiled["heat_topology_minimum_on_loads"], [False, value > 0, value > 0]
             )
+            self.assertEqual(compiled["shared_thermal_tanks"][0]["load_ids"], [0, 2])
+            self.assertEqual(compiled["shared_thermal_tanks"][1]["load_ids"], [1])
         del topo["sources"][0]["minimum_on_timesteps"]
         self.assertEqual(utils.compile_heat_topology(topo)["def_minimum_on_time"], [0, 0, 0])
         for value in (-1, 1.5, True, "4", None, 4.0):
@@ -2425,6 +2429,33 @@ class TestUtils(unittest.IsolatedAsyncioTestCase):
                 self.assertRaisesRegex(ValueError, r"hp.*minimum_on_timesteps"),
             ):
                 utils.compile_heat_topology(topo)
+
+    def test_topology_minimum_on_requires_power_or_semi_continuous(self):
+        topo = self._hp_booster_extend_topo(extend=False)
+        source = topo["sources"][0]
+        source.update(minimum_on_timesteps=4, treat_as_semi_cont=False)
+        for min_power in (None, 0):
+            if min_power is None:
+                source.pop("min_power", None)
+            else:
+                source["min_power"] = min_power
+            with (
+                self.subTest(min_power=min_power),
+                self.assertRaisesRegex(
+                    ValueError, r"hp.*minimum_on_timesteps.*min_power > 0.*treat_as_semi_cont"
+                ),
+            ):
+                utils.compile_heat_topology(topo)
+        source["min_power"] = 440
+        self.assertEqual(utils.compile_heat_topology(topo)["def_minimum_on_time"], [4, 0])
+        source["min_power"] = 0
+        source["treat_as_semi_cont"] = True
+        self.assertEqual(utils.compile_heat_topology(topo)["def_minimum_on_time"], [4, 0])
+        source["treat_as_semi_cont"] = False
+        source["minimum_on_timesteps"] = 0
+        self.assertEqual(utils.compile_heat_topology(topo)["def_minimum_on_time"], [0, 0])
+        del source["minimum_on_timesteps"]
+        self.assertEqual(utils.compile_heat_topology(topo)["def_minimum_on_time"], [0, 0])
 
     async def test_topology_minimum_on_runtime_modes(self):
         for extend in (False, True):

@@ -773,6 +773,12 @@ def compile_heat_topology(topology: dict) -> dict:
                 f"heat_topology.sources[{src['id']}].minimum_on_timesteps must be "
                 f"a non-negative integer, got {value!r}"
             )
+        if value > 0 and not bool(src.get("treat_as_semi_cont", True)):
+            if not float(src.get("min_power", 0)) > 0:
+                raise ValueError(
+                    f"heat_topology.sources[{src['id']}].minimum_on_timesteps requires "
+                    "min_power > 0 when treat_as_semi_cont is false"
+                )
 
     src_by_id = {s["id"]: s for s in sources}
     src_index_by_id = {s["id"]: i for i, s in enumerate(sources)}

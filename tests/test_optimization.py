@@ -11689,7 +11689,9 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
             return res
 
         base = await solve(0)
-        constrained = await solve(4)
+        with self.assertLogs(logger, level="WARNING") as logs:
+            constrained = await solve(4)
+        self.assertTrue(any("no current state" in msg for msg in logs.output))
         omitted = await solve(None)
         base_power = base["P_deferrable0"].to_numpy()
         np.testing.assert_allclose(base_power, omitted["P_deferrable0"], atol=0.01)
@@ -11751,6 +11753,31 @@ class TestOptimization(unittest.IsolatedAsyncioTestCase):
         result = await solve(4, forecast=short)
         self.assertTrue(np.all(result["P_deferrable0"].to_numpy() < 0.01))
         await solve(4, forecast=costly, force_relaxed=True)
+
+        # One source feeding two stores compiles to two independently tracked
+        # flow loads. A running first flow does not force the second flow ON.
+        topology["storage"].append({**topology["storage"][0], "id": "second"})
+        topology["flows"].append({"from": "hp", "to": "second"})
+        runtime = {
+            "heat_topology": topology,
+            "def_current_state": [True, False],
+            "def_current_on_timesteps": [2, 0],
+        }
+        _, _, oc, _ = await utils.treat_runtimeparams(
+            orjson.dumps(runtime).decode(),
+            params_json,
+            copy.deepcopy(self.retrieve_hass_conf),
+            copy.deepcopy(self.optim_conf),
+            copy.deepcopy(self.plant_conf),
+            "naive-mpc-optim",
+            logger,
+            emhass_conf,
+        )
+        oc["set_use_battery"] = False
+        opt, result = self._run_min_on_optim(oc, costly, n)
+        self.assertEqual(opt.optim_status, "Optimal")
+        self.assertTrue(np.all(result["P_deferrable0"].to_numpy()[:2] >= 439.99))
+        self.assertTrue(np.all(result["P_deferrable1"].to_numpy() < 0.01))
 
     def test_minimum_on_time_forward_red1(self):
         """RED-1 (forward): with a price profile that makes the base solver
