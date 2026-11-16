@@ -118,7 +118,7 @@ def _record_optim_snapshot(
 def _write_results(input_data_dict: dict, opt_res: pd.DataFrame, filename: str) -> None:
     """Write the results CSV that publish-data reads, except on a dry run."""
     if not is_dry_run(input_data_dict):
-        target = input_data_dict["emhass_conf"]["data_path"] / filename
+        target = utils.data_file_path(input_data_dict["emhass_conf"]["data_path"], filename)
         atomic_write(target, lambda stream: opt_res.to_csv(stream, index_label="timestamp"))
 
 
@@ -1406,7 +1406,8 @@ def _battery_fit_is_stale(
         age = _age_of(attempt.get("attempted_at"))
         if age is not None and age <= max_age:
             logger.info(
-                f"{label} recorded a failed attempt (status={attempt.get('status')}, "
+                f"{label} recorded a failed attempt "
+                f"(status={_battery_id_safe_log_value(attempt.get('status'))}, "
                 f"age: {age.total_seconds() / 3600:.1f}h, max: {max_age_hours}h); "
                 "keeping configured battery values, backing off."
             )
@@ -1424,10 +1425,25 @@ def _battery_fit_is_stale(
         )
     else:
         logger.warning(
-            f"{label} persisted entry has status {entry.get('status')!r}, not 'ok', "
+            f"{label} persisted entry has status "
+            f"{_battery_id_safe_log_value(entry.get('status'))!r}, not 'ok', "
             "and no usable recorded attempt; will re-fit."
         )
     return True
+
+
+def _battery_id_safe_log_value(value: object) -> str:
+    """Render persisted battery identification scalars as bounded, single-line log text.
+
+    Normal numeric, None and status values remain unchanged. Untrusted control
+    characters are escaped before reaching the existing plain-text logger.
+    """
+    if value is not None and not isinstance(value, (str, int, float, bool)):
+        return "<invalid>"
+    raw = str(value)
+    if len(raw) > 160:
+        raw = raw[:160] + "...[truncated]"
+    return json.dumps(raw, ensure_ascii=True)[1:-1].replace("\x7f", r"\u007f")
 
 
 def _log_battery_identification_summary(
@@ -1456,8 +1472,8 @@ def _log_battery_identification_summary(
         "round-trip efficiency %.3f (one-way %.3f) vs configured one-way %.3f.",
         battery_tag,
         cap.get("value") or float("nan"),
-        cap.get("ci_low"),
-        cap.get("ci_high"),
+        _battery_id_safe_log_value(cap.get("ci_low")),
+        _battery_id_safe_log_value(cap.get("ci_high")),
         configured_cap_kwh,
         rte.get("value") or float("nan"),
         payload.get("eta_charge_symmetric") or float("nan"),
@@ -1492,8 +1508,8 @@ def _log_battery_identification_recommendation(
         battery_tag,
         configured_cap_kwh,
         identified_cap_kwh if identified_cap_kwh is not None else float("nan"),
-        configured_eta,
-        identified_eta,
+        _battery_id_safe_log_value(configured_eta),
+        _battery_id_safe_log_value(identified_eta),
     )
 
 
@@ -1680,8 +1696,10 @@ async def _identify_battery_impl(
                 # max_age cadence, per #1052) instead of re-fitting every run.
                 # Logged at INFO - this is expected operation, not a problem.
                 logger.info(
-                    f"Battery identification: recorded attempt at {attempt.get('attempted_at')} "
-                    f"failed guardrails (status={attempt.get('status')}); keeping configured "
+                    "Battery identification: recorded attempt at "
+                    f"{_battery_id_safe_log_value(attempt.get('attempted_at'))} "
+                    "failed guardrails (status="
+                    f"{_battery_id_safe_log_value(attempt.get('status'))}); keeping configured "
                     "battery values, backing off until max_age."
                 )
                 return
@@ -2259,7 +2277,7 @@ async def _prepare_ml_fit_predict(ctx: SetupContext):
     var_model = ctx.params["passed_data"]["var_model"]
     if ctx.get_data_from_file:
         filename = model_type + ".pkl"
-        filename_path = ctx.emhass_conf["data_path"] / filename
+        filename_path = utils.data_file_path(ctx.emhass_conf["data_path"], filename)
         async with aiofiles.open(filename_path, "rb") as inp:
             content = await inp.read()
             df_input_data, _, _, _ = pickle.loads(content)
@@ -2287,11 +2305,7 @@ def _prepare_regressor_fit(ctx: SetupContext):
     if not csv_file:
         ctx.logger.error("csv_file is required for regressor actions but was not provided.")
         return None
-    if ctx.get_data_from_file:
-        base_path = ctx.emhass_conf["data_path"]
-        filename_path = pathlib.Path(base_path) / csv_file
-    else:
-        filename_path = ctx.emhass_conf["data_path"] / csv_file
+    filename_path = utils.data_file_path(ctx.emhass_conf["data_path"], csv_file)
     if filename_path.is_file():
         df_input_data = pd.read_csv(filename_path, parse_dates=True)
     else:
@@ -3313,7 +3327,7 @@ async def forecast_model_fit(
     # Save model
     if not debug:
         filename = model_type + default_pkl_suffix
-        filename_path = input_data_dict["emhass_conf"]["data_path"] / filename
+        filename_path = utils.data_file_path(input_data_dict["emhass_conf"]["data_path"], filename)
         # Whole, so a run loading the model at the same moment never reads half of it.
         await utils.replace_file(filename_path, pickle.dumps(mlf, pickle.HIGHEST_PROTOCOL))
         logger.debug("saved model to " + str(filename_path))
@@ -3469,7 +3483,7 @@ async def forecast_model_predict(
     # Load model
     model_type = input_data_dict["params"]["passed_data"]["model_type"]
     filename = model_type + default_pkl_suffix
-    filename_path = input_data_dict["emhass_conf"]["data_path"] / filename
+    filename_path = utils.data_file_path(input_data_dict["emhass_conf"]["data_path"], filename)
     if not debug:
         if filename_path.is_file():
             async with aiofiles.open(filename_path, "rb") as inp:
@@ -3564,7 +3578,7 @@ async def forecast_model_tune(
     # Load model
     model_type = input_data_dict["params"]["passed_data"]["model_type"]
     filename = model_type + default_pkl_suffix
-    filename_path = input_data_dict["emhass_conf"]["data_path"] / filename
+    filename_path = utils.data_file_path(input_data_dict["emhass_conf"]["data_path"], filename)
     if not debug:
         if filename_path.is_file():
             async with aiofiles.open(filename_path, "rb") as inp:
@@ -3590,7 +3604,7 @@ async def forecast_model_tune(
     # Save model
     if not debug:
         filename = model_type + default_pkl_suffix
-        filename_path = input_data_dict["emhass_conf"]["data_path"] / filename
+        filename_path = utils.data_file_path(input_data_dict["emhass_conf"]["data_path"], filename)
         # Whole, so a run loading the model at the same moment never reads half of it.
         await utils.replace_file(filename_path, pickle.dumps(mlf, pickle.HIGHEST_PROTOCOL))
         logger.debug("Saved model to " + str(filename_path))
@@ -3649,7 +3663,7 @@ async def regressor_model_fit(
     # Save model
     if not debug:
         filename = model_type + "_mlr.pkl"
-        filename_path = input_data_dict["emhass_conf"]["data_path"] / filename
+        filename_path = utils.data_file_path(input_data_dict["emhass_conf"]["data_path"], filename)
         async with aiofiles.open(filename_path, "wb") as outp:
             await outp.write(pickle.dumps(mlr, pickle.HIGHEST_PROTOCOL))
     return mlr
@@ -3676,7 +3690,7 @@ async def regressor_model_predict(
         logger.error("parameter: 'model_type' not passed")
         return False
     filename = model_type + "_mlr.pkl"
-    filename_path = input_data_dict["emhass_conf"]["data_path"] / filename
+    filename_path = utils.data_file_path(input_data_dict["emhass_conf"]["data_path"], filename)
     if not debug:
         if filename_path.is_file():
             async with aiofiles.open(filename_path, "rb") as inp:
@@ -3859,7 +3873,7 @@ async def export_influxdb_to_csv(
     numeric_cols = df_export.select_dtypes(include=[np.number]).columns
     df_export[numeric_cols] = df_export[numeric_cols].round(decimal_places)
     # Save to CSV
-    csv_path = pathlib.Path(data_path) / csv_filename
+    csv_path = utils.data_file_path(data_path, csv_filename)
     df_export.to_csv(csv_path, index=False)
     logger.info(f"✓ Successfully exported to {csv_filename}")
     logger.info(f"  Rows: {df_export.shape[0]}")
