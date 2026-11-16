@@ -1,0 +1,48 @@
+name: EMHASS Thermal Test
+description: Isolated EMHASS 0.18.9 with minimum-on-time for heat topology (testing only)
+url: https://github.com/ErikT80/emhass
+version: v0.18.9-thermal1
+slug: emhass-thermal-test
+arch:
+  - amd64
+  - aarch64
+image: "ghcr.io/erikt80/emhass"
+boot: manual
+ports:
+  5000/tcp: 5001
+ports_description:
+  5000/tcp: Test web interface and API; does not replace production port 5000
+webui: http://[HOST]:[PORT:5000]
+map:
+  - type: addon_config
+    path: /config
+    read_only: false
+init: false
+hassio_role: default
+homeassistant_api: true
+ingress: true
+ingress_port: 5000
+ingress_stream: true
+panel_icon: mdi:home-lightning-bolt-outline
+panel_title: EMHASS Thermal Test
+options:
+  data_path: /data
+  config_path: /config/config.json
+  time_zone: Europe/Amsterdam
+schema:
+  hass_url: "str?"
+  long_lived_token: "password?"
+  data_path: "list(default|/config|/data|/share|/share/emhass)?"
+  config_path: "list(default|/config/config.json|/share/config.json|/share/emhass/config.json)?"
+  time_zone: "match((\\w+)?(\\/)(\\w+))?"
+  Latitude: "float?"
+  Longitude: "float?"
+  Altitude: "float?"
+  solcast_api_key: "password?"
+  solcast_rooftop_id: "str?"
+  solar_forecast_kwp: "float?"
+  server_ip: "list(0.0.0.0|127.0.0.1)?"
+  influxdb_username: "str?"
+  influxdb_password: "password?"
+  victoriametrics_username: "str?"
+  victoriametrics_password: "password?"
