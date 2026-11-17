@@ -777,6 +777,13 @@
       "maximum": 100,
       "unit": "count"
     },
+    "set_battery_fleet_exclusive_direction": {
+      "friendly_name": "Enforce one battery fleet direction per timestep",
+      "Description": "When enabled with multiple active batteries, charging and discharging cannot occur in the same timestep. Any battery can remain idle, and the fleet can change direction between timesteps. Defaults to false.",
+      "input": "boolean",
+      "default_value": false,
+      "unit": "none"
+    },
     "set_nocharge_from_grid": {
       "friendly_name": "Forbid charging battery from grid",
       "Description": "Set this to true if you want to forbid charging the battery from the grid. The battery will only be charged from excess PV",

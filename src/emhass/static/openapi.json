@@ -151,6 +151,12 @@
             "application/json": {
               "schema": {
                 "type": "object",
+                "properties": {
+                  "set_battery_fleet_exclusive_direction": {
+                    "type": "boolean",
+                    "description": "Override battery fleet direction exclusivity for this optimization. Omit to use the configured value."
+                  }
+                },
                 "additionalProperties": true
               }
             }
@@ -272,6 +278,12 @@
             "application/json": {
               "schema": {
                 "type": "object",
+                "properties": {
+                  "set_battery_fleet_exclusive_direction": {
+                    "type": "boolean",
+                    "description": "Override battery fleet direction exclusivity for this optimization. Omit to use the configured value."
+                  }
+                },
                 "additionalProperties": true
               }
             }
@@ -1266,6 +1278,12 @@
             "title": "Number of batteries",
             "x-unit": "count",
             "description": "Define the number of physical batteries in the plant. Defaults to 1. When greater than 1, every per-battery array parameter below (capacity, power limits, efficiencies, SOC min/max/target, stress cost, weight_battery_charge/discharge, SOC deficit/surplus threshold/cost) accepts either a single scalar (broadcast to every battery) or a list of exactly this many entries. See docs/config.md for the full broadcast/nesting semantics. At most 100. (unit: count)"
+          },
+          "set_battery_fleet_exclusive_direction": {
+            "type": "boolean",
+            "default": false,
+            "title": "Enforce one battery fleet direction per timestep",
+            "description": "When enabled with multiple active batteries, charging and discharging cannot occur in the same timestep. Any battery can remain idle, and the fleet can change direction between timesteps. Defaults to false."
           },
           "set_nocharge_from_grid": {
             "type": "boolean",

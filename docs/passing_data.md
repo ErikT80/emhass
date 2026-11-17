@@ -311,6 +311,8 @@ Here is the list of the other additional dictionary keys that can be passed at r
 
 - `current_period_peak` the peak grid import (in Watts) already incurred during the current billing period. Used by `naive-mpc-optim` and `dayahead-optim`, and only when a capacity/demand charge (`capacity_cost_per_kw`) is configured. A list of K entries when `capacity_cost_per_kw` is a list of K rates (issue #540 Part B). See the dedicated section below.
 
+- `set_battery_fleet_exclusive_direction` overrides the configured [battery fleet direction setting](config.md#optimization-configuration-parameters) for one optimization. Pass JSON `true` to forbid charging and discharging in the same timestep across multiple active batteries, or `false` to allow independent directions. Omit the key to use the configuration file value.
+
 ### Requiring an intermediate battery SOC target (naive-mpc-optim)
 
 By default the battery SOC is only pinned at the start (`soc_init`) and end (`soc_final`) of the horizon, leaving the optimizer free to choose the trajectory in between. Sometimes you want to *guarantee* the battery reaches a given charge level **partway through** the horizon — for example, "make sure the battery is full by the time the cheap window ends, even though it's fine to discharge it afterwards". This is the request in [issue #553](https://github.com/davidusb-geek/emhass/issues/553).

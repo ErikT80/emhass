@@ -15,9 +15,11 @@ import logging
 import math
 import pathlib
 import unittest
+from unittest import mock
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from emhass.command_line import OptimizationCache
 from emhass.optimization import Optimization
@@ -122,6 +124,124 @@ def make_pin_scenario():
     df_input["unit_load_cost"] = [0.30, 0.28, 0.28, 0.32, 0.10, 0.10, 0.12, 0.35, 0.40, 0.38]
     df_input["unit_prod_price"] = [0.05, 0.05, 0.05, 0.06, 0.04, 0.04, 0.04, 0.06, 0.07, 0.07]
     return index, p_pv, p_load, df_input
+
+
+def fleet_direction_scenario(batteries, exclusive, *, max_grid=50000, hybrid=False):
+    opt = build_optimization(
+        optim_overrides={
+            "set_battery_fleet_exclusive_direction": exclusive,
+            "delta_forecast_daily": pd.Timedelta(hours=4),
+        },
+        plant_overrides={
+            "number_of_batteries": batteries,
+            "maximum_power_from_grid": max_grid,
+            "inverter_is_hybrid": hybrid,
+            "inverter_ac_output_max": 12000,
+            "inverter_ac_input_max": 12000,
+            "inverter_efficiency_dc_ac": 0.95,
+            "inverter_efficiency_ac_dc": 0.93,
+            "battery_charge_efficiency": [0.90, 0.96, 0.92][:batteries],
+            "battery_discharge_efficiency": [0.95, 0.92, 0.94][:batteries],
+        },
+        opt_time_delta=4,
+    )
+    index = pd.date_range("2026-03-02", periods=8, freq="30min", tz="Europe/Tallinn")
+    df = pd.DataFrame(
+        {"unit_load_cost": [-0.15] * 4 + [0.45] * 4, "unit_prod_price": 0.04}, index=index
+    )
+    return opt, df, pd.Series(0.0, index=index), pd.Series(6000.0, index=index)
+
+
+@pytest.mark.parametrize(
+    ("batteries", "hybrid", "idle"),
+    [(2, False, False), (3, False, False), (3, False, True), (2, True, False)],
+)
+def test_fleet_direction_can_switch_and_leave_a_battery_idle(batteries, hybrid, idle):
+    opt, df, pv, load = fleet_direction_scenario(batteries, True, hybrid=hybrid)
+    soc = [0.35, 0.57, 0.68][:batteries]
+    availability = [None, None, 0] if idle else [None] * batteries
+    df.loc[df.index[-1], "unit_load_cost"] = 0.9
+    load.iloc[-1] = 16000
+    result = opt.perform_naive_mpc_optim(
+        df, pv, load, len(df), soc_init=soc, soc_final=soc, battery_availability=availability
+    )
+    assert opt.optim_status == "Optimal"
+    power = result[[f"P_batt_{k}" for k in range(batteries)]].to_numpy()
+    assert not ((power > 0.01).any(axis=1) & (power < -0.01).any(axis=1)).any()
+    active = power[:, : batteries - int(idle)]
+    assert ((active[:4] < -0.01).all(axis=1)).any()
+    assert ((active[4:] > 0.01).all(axis=1)).any()
+    if idle:
+        np.testing.assert_allclose(power[:, 2], 0, atol=0.01)
+    for k in range(batteries):
+        charge_eff = opt.plant_conf["battery_charge_efficiency"][k]
+        discharge_eff = opt.plant_conf["battery_discharge_efficiency"][k]
+        stored_energy = (
+            -np.cumsum(
+                np.maximum(power[:, k], 0) / discharge_eff + np.minimum(power[:, k], 0) * charge_eff
+            )
+            * 0.5
+        )
+        np.testing.assert_allclose(
+            result[f"SOC_opt_{k}"], soc[k] + stored_energy / 10000, atol=1e-6
+        )
+        assert result[f"SOC_opt_{k}"].iloc[-1] == pytest.approx(soc[k])
+
+
+def test_fleet_direction_conflict_remains_infeasible_in_fallback(caplog):
+    # The first-step SoC target forces battery 0 to draw >4 kW. The grid
+    # cap and 2 kW load force battery 1 to discharge in that same step.
+    for exclusive in (False, True):
+        opt, df, pv, load = fleet_direction_scenario(2, exclusive, max_grid=4500)
+        result = opt.perform_naive_mpc_optim(
+            df,
+            pv,
+            load / 3,
+            len(df),
+            soc_init=[0.3, 0.7],
+            soc_final=[0.5, 0.5],
+            soc_target=[0.5, None],
+            soc_target_timestep=[0, None],
+        )
+        if exclusive:
+            assert "Relaxed optimization also failed with status: infeasible" in caplog.text
+            assert opt.optim_status == "Infeasible"
+            assert list(result.columns) == ["optim_status"]
+        else:
+            assert opt.optim_status == "Optimal"
+            assert result["P_batt_0"].iloc[0] < -4000
+            assert result["P_batt_1"].iloc[0] > 1000
+
+
+def test_fleet_direction_cache_hit_and_successful_relaxed_retry():
+    opt, df, pv, load = fleet_direction_scenario(2, True)
+    settings = (opt.optim_conf, opt.plant_conf, opt.costfun, opt.retrieve_hass_conf, opt.logger)
+    soc = [0.37, 0.61]
+    OptimizationCache.clear()
+    try:
+        opt.perform_naive_mpc_optim(df, pv, load, len(df), soc_init=soc, soc_final=soc)
+        problem = opt.prob
+        OptimizationCache.put(opt, *settings)
+        assert OptimizationCache.get(*settings) is opt
+        assert (
+            OptimizationCache.get(
+                {**opt.optim_conf, "set_battery_fleet_exclusive_direction": False}, *settings[1:]
+            )
+            is None
+        )
+
+        # Force the retry branch on the cached MILP. Both optimizations really solve.
+        with mock.patch.object(opt, "_needs_relaxed_retry", return_value=True):
+            result = opt.perform_naive_mpc_optim(
+                df, pv, load, len(df), soc_init=soc[::-1], soc_final=soc[::-1]
+            )
+        assert opt.optim_status == "Optimal (Relaxed)"
+        assert opt.prob is problem
+        power = result[["P_batt_0", "P_batt_1"]].to_numpy()
+        assert (power > 0.01).any() and (power < -0.01).any()
+        assert not ((power > 0.01).any(axis=1) & (power < -0.01).any(axis=1)).any()
+    finally:
+        OptimizationCache.clear()
 
 
 class TestMultiBatteryN1RegressionPin(unittest.TestCase):

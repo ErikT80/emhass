@@ -140,6 +140,7 @@
   "battery_inverter_index": null,
   "pv_plant_inverter_index": null,
   "set_use_battery": false,
+  "set_battery_fleet_exclusive_direction": false,
   "number_of_batteries": 1,
   "battery_discharge_power_max": 1000,
   "battery_charge_power_max": 1000,

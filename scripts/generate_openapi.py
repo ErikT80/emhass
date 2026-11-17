@@ -201,6 +201,19 @@ def build_spec(routes: set | None = None) -> dict:
         "Healthz": _load_json(_HEALTHZ_SCHEMA),
     }
     config_ref = {"$ref": "#/components/schemas/Config"}
+    action_params = {
+        "type": "object",
+        "properties": {
+            "set_battery_fleet_exclusive_direction": {
+                "type": "boolean",
+                "description": (
+                    "Override battery fleet direction exclusivity for this optimization. "
+                    "Omit to use the configured value."
+                ),
+            }
+        },
+        "additionalProperties": True,
+    }
 
     def json_ct(schema: dict) -> dict:
         return {"content": {"application/json": {"schema": schema}}}
@@ -258,7 +271,7 @@ def build_spec(routes: set | None = None) -> dict:
                         "schema": {"type": "string"},
                     }
                 ],
-                "requestBody": json_ct({"type": "object", "additionalProperties": True}),
+                "requestBody": json_ct(action_params),
                 "responses": {
                     "200": {
                         "description": "Optimization plan",
@@ -334,7 +347,7 @@ def build_spec(routes: set | None = None) -> dict:
                         },
                     }
                 ],
-                "requestBody": json_ct({"type": "object", "additionalProperties": True}),
+                "requestBody": json_ct(action_params),
                 "responses": {
                     "200": {
                         "description": "The solver ran; status says how",
