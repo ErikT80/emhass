@@ -109,4 +109,4 @@ fi && \
 WORKER_CLASS=${WORKER_CLASS:-uvicorn.workers.UvicornWorker} && \
 PORT=${PORT:-5000} && \
 IP=${IP:-0.0.0.0} && \
-exec uv run --frozen gunicorn emhass.web_server:app -c gunicorn.conf.py -k \"$WORKER_CLASS\""]
+exec gunicorn emhass.web_server:app -c gunicorn.conf.py -k \"$WORKER_CLASS\""]

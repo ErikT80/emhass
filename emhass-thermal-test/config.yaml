@@ -1,7 +1,7 @@
 name: EMHASS Thermal Test
-description: Isolated EMHASS 0.18.9 with minimum-on-time for heat topology (testing only)
+description: Isolated EMHASS 0.18.10 with heat-topology minimum on-time and battery fleet direction control
 url: https://github.com/ErikT80/emhass
-version: v0.18.9-thermal1
+version: v0.18.10-ems1
 slug: emhass-thermal-test
 arch:
   - amd64
@@ -21,7 +21,7 @@ init: false
 hassio_role: default
 homeassistant_api: true
 ingress: true
-ingress_port: 5000
+ingress_port: 8099
 ingress_stream: true
 panel_icon: mdi:home-lightning-bolt-outline
 panel_title: EMHASS Thermal Test
@@ -32,6 +32,7 @@ options:
 schema:
   hass_url: "str?"
   long_lived_token: "password?"
+  emhass_api_token: "password?"
   data_path: "list(default|/config|/data|/share|/share/emhass)?"
   config_path: "list(default|/config/config.json|/share/config.json|/share/emhass/config.json)?"
   time_zone: "match((\\w+)?(\\/)(\\w+))?"
