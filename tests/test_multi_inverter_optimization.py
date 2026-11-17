@@ -634,6 +634,19 @@ def test_caps_bind_per_inverter_even_when_the_sum_would_allow_more():
     assert col(solve(agg, pv=(5000.0,), soc=0.1), "P_hybrid_inverter").max() > 3000 + 100
 
 
+def test_fleet_direction_allows_discharge_while_another_inverter_spills_pv():
+    opt = build_multi(
+        battery_inverter_index=(0, 1),
+        cap_out=[3000, 3000],
+        optim_overrides={"set_battery_fleet_exclusive_direction": True},
+        plant_overrides={"battery_discharge_power_max": [0, 5000]},
+    )
+    result = solve(opt, pv=(5000.0, 0.0), load=6000, soc=[0.95, 0.7], final=[0.95, 0.5])
+    np.testing.assert_allclose(col(result, "P_batt_0"), 0, atol=0.01)
+    np.testing.assert_allclose(col(result, "P_PV_spill_0"), 2000, atol=0.01)
+    assert (col(result, "P_batt_1") > 0.01).any()
+
+
 def test_pv_of_one_inverter_reaches_a_battery_on_another_through_both_efficiencies():
     # PV-only inverter 0, battery-only inverter 1; paying to export, so the PV is stored.
     opt = build_multi(

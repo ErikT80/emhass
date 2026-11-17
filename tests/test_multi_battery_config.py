@@ -96,6 +96,17 @@ def test_number_of_batteries_overridable_via_config():
     assert params["plant_conf"]["number_of_batteries"] == 3
 
 
+def test_fleet_direction_defaults_and_runtime_overrides():
+    key = "set_battery_fleet_exclusive_direction"
+    for configured in (False, True):
+        params = build_params({key: True} if configured else None)
+        assert params["optim_conf"][key] is configured
+        _, inherited, _ = treat_runtime({"prediction_horizon": 8}, params, "naive-mpc-optim")
+        assert inherited[key] is configured
+        _, overridden, _ = treat_runtime({key: not configured}, params, "naive-mpc-optim")
+        assert overridden[key] is not configured
+
+
 # ──────────── per-battery array broadcast / validate (check_batt_params) ────────
 
 

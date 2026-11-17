@@ -4196,6 +4196,18 @@ class Optimization:
         D = self.vars["D"]  # Binary: 1=Import, 0=Export (shared - one grid connection)
         p_pv = self.param_pv_forecast
 
+        if self.n_batt > 1 and self.optim_conf.get("set_battery_fleet_exclusive_direction") is True:
+            if self.n_inv > 1 and any(spill is not None for spill in self.vars["p_pv_spill_inv"]):
+                # An idle battery on a spilling inverter needs E[k] = 0 even
+                # if another battery discharges. Gate fleet charging on each
+                # discharge binary without requiring their idle values to agree.
+                fleet_charge = -sum(p_sto_neg)
+                fleet_charge_max = sum(self.param_battery_charge_power_max)
+                for direction in E:
+                    constraints.append(fleet_charge <= fleet_charge_max * (1 - direction))
+            else:
+                constraints.extend(direction == E[0] for direction in E[1:])
+
         batt_conf = self._battery_conf_as_lists()
         cap_list = batt_conf["cap"]
         eff_dis_list = batt_conf["eff_dis"]
